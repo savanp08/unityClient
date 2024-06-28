@@ -10,12 +10,13 @@ public class MPDParser
 
     public IEnumerator FetchMPD(string url)
     {
+        Debug.Log("----->>>>> Fetching MPD from: " + url);
         using (UnityWebRequest webRequest = UnityWebRequest.Get(url))
         {
             yield return webRequest.SendWebRequest();
             if (webRequest.result == UnityWebRequest.Result.ConnectionError || webRequest.result == UnityWebRequest.Result.ProtocolError)
             {
-                Debug.LogError("MPD fetch error: " + webRequest.error);
+                Debug.LogError("----->>>>> MPD fetch error: " + webRequest.error);
                 yield break;
             }
             ParseMPD(webRequest.downloadHandler.text);

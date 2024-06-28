@@ -73,6 +73,8 @@ if(GetPlatformCode() == 'W' || GetPlatformCode() == 'A'){
     {
         return bufferQueue.Count > 0;
     }
+
+    
      public static char GetPlatformCode()
     {
         #if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN

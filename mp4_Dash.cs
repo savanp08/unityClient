@@ -7,7 +7,7 @@
 
 // public class DashVideoPlayer : MonoBehaviour
 // {
-//     public string mpdURL = "https://a360-vr-video-streaming-7540c67a421c.herokuapp.com/playable_split/videos/Manifest.mpd"; // URL to the MPD file
+//     public string mpdURL = "http://192.168.1.201:3000/playable_split/videos/Manifest.mpd"; // URL to the MPD file
 //     private VideoPlayer videoPlayer1;
 //     private VideoPlayer videoPlayer2;
 //     private MPDParser mpdParser;
@@ -269,7 +269,7 @@
 
 // public class DashVideoPlayer : MonoBehaviour
 // {
-//     public string mpdURL = "https://a360-vr-video-streaming-7540c67a421c.herokuapp.com/playable_split/videos/Manifest.mpd"; // URL to the MPD file
+//     public string mpdURL = "http://192.168.1.201:3000/playable_split/videos/Manifest.mpd"; // URL to the MPD file
 //     private VideoPlayer videoPlayer1;
 //     private VideoPlayer videoPlayer2;
 //     private MPDParser mpdParser;
@@ -434,7 +434,7 @@
 
 // public class DashVideoPlayer : MonoBehaviour
 // {
-//     public string mpdURL = "https://a360-vr-video-streaming-7540c67a421c.herokuapp.com/playable_split/videos/Manifest.mpd"; // URL to the MPD file
+//     public string mpdURL = "http://192.168.1.201:3000/playable_split/videos/Manifest.mpd"; // URL to the MPD file
 //     private VideoPlayer videoPlayer1;
 //     private VideoPlayer videoPlayer2;
 //     private MPDParser mpdParser;
@@ -575,7 +575,7 @@
 
 // public class DashVideoPlayer : MonoBehaviour
 // {
-//     public string mpdURL = "https://a360-vr-video-streaming-7540c67a421c.herokuapp.com/playable_split/videos/Manifest.mpd"; // URL to the MPD file
+//     public string mpdURL = "http://192.168.1.201:3000/playable_split/videos/Manifest.mpd"; // URL to the MPD file
 //     private VideoPlayer videoPlayer;
 //     private MPDParser mpdParser;
 //     private SegmentFetcher segmentFetcher;
@@ -683,7 +683,7 @@
 
 // public class DashVideoPlayer : MonoBehaviour
 // {
-//     public string mpdURL = "https://a360-vr-video-streaming-7540c67a421c.herokuapp.com/playable_split/videos/Manifest.mpd"; // URL to the MPD file
+//     public string mpdURL = "http://192.168.1.201:3000/playable_split/videos/Manifest.mpd"; // URL to the MPD file
 //     private VideoPlayer videoPlayer;
 //     private MPDParser mpdParser;
 //     private SegmentFetcher segmentFetcher;
@@ -790,7 +790,7 @@
 
 // public class DashVideoPlayer : MonoBehaviour
 // {
-//     public string mpdURL = "https://a360-vr-video-streaming-7540c67a421c.herokuapp.com/playable_split/videos/Manifest.mpd"; // URL to the MPD file
+//     public string mpdURL = "http://192.168.1.201:3000/playable_split/videos/Manifest.mpd"; // URL to the MPD file
 //     private VideoPlayer videoPlayer;
 //     private MPDParser mpdParser;
 //     private SegmentFetcher segmentFetcher;
@@ -894,7 +894,7 @@
 
 // public class DashVideoPlayer : MonoBehaviour
 // {
-//     public string mpdURL = "https://a360-vr-video-streaming-7540c67a421c.herokuapp.com/playable_split/videos/Manifest.mpd"; // URL to the MPD file
+//     public string mpdURL = "http://192.168.1.201:3000/playable_split/videos/Manifest.mpd"; // URL to the MPD file
 //     private VideoPlayer videoPlayer1;
 //     private VideoPlayer videoPlayer2;
 //     private VideoPlayer currentPlayer;
