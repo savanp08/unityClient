@@ -4,7 +4,7 @@ using System.IO;
 using UnityEngine;
 using UnityEngine.XR;
 
-public class InputTracker : MonoBehaviour
+public class InputTracker2 : MonoBehaviour
 {
     private XRNode rightHand = XRNode.RightHand;
     private string logFileName;
@@ -21,7 +21,7 @@ public class InputTracker : MonoBehaviour
         // Check for button presses and log them
         TrackInput(rightHand);
     }
-
+    
     private void TrackInput(XRNode hand)
     {
         List<InputFeatureUsage> features = new List<InputFeatureUsage>();
@@ -41,8 +41,11 @@ public class InputTracker : MonoBehaviour
                     {
                         if (value)
                         {
+                            
+                            if(feature.name!="IsTracked") { 
+                            SendHapticFeedback(device);
                             LogInput($"{hand} - {feature.name} pressed");
-                            if(feature.name!="IsTracked") { SendHapticFeedback(device); } // Send haptic feedback on button press
+                             } // Send haptic feedback on button press
                         }
                         else
                         {

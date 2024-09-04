@@ -82,6 +82,7 @@ public class EyeTrackingDataCollector : MonoBehaviour
 
                 EyeManager.Instance.GetLeftEyePupilDiameter(out leftPupilDiameter);
                 EyeManager.Instance.GetRightEyePupilDiameter(out rightPupilDiameter);
+                Debug.Log($"----->>>>>> Left Eye Pupil Diameter: {leftPupilDiameter}");
 
                 EyeManager.Instance.GetLeftEyePupilPositionInSensorArea(out leftPupilPosition);
                 EyeManager.Instance.GetRightEyePupilPositionInSensorArea(out rightPupilPosition);
@@ -116,6 +117,13 @@ public class EyeTrackingDataCollector : MonoBehaviour
                     Debug.Log($"----->>>>>> Test2: Left Eye Origin: {leftOrigin}");
                     Debug.Log($"----->>>>>> Test2: Right Eye Origin: {rightOrigin}");
                     Debug.Log($"----->>>>>> Test2: Combined Eye Origin: {combinedOrigin}");
+                    if(EyeManager.Instance.GetLeftEyePupilDiameter(out float leftPupilDiameter)){
+                        Debug.Log($"----->>>>>> Test2: Left Eye Pupil Diameter: {leftPupilDiameter}");
+                    }
+                    else{
+                        Debug.LogError("----->>>>>> Test2: Failed to get Left Eye Pupil Diameter.");
+                    }
+
                 }
                 else
                 {
