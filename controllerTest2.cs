@@ -1,203 +1,174 @@
+using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using UnityEngine.XR;
 
-public class InputTracker2 : MonoBehaviour
+public class InputTracker : MonoBehaviour
 {
-    private InputDevice rightController;
-    private InputDevice leftController;
+    private XRNode rightHand = XRNode.RightHand;
+    private XRNode leftHand = XRNode.LeftHand;
     private string logFileName;
     private int fileIndex = 0;
-    private float hapticInterval = 5f;
-    private float nextHapticTime;
-    private List<InputDevice> devices;
+    public int trackQueueSize = 0;
+
+    private DashVideoPlayer dashVideoPlayer;
+
+    private Queue<InputLogEntry> inputQueue = new Queue<InputLogEntry>();
+    private bool waitingForInput = false;
 
     void Start()
     {
-        devices = new List<InputDevice>();
-        InputDevices.GetDevices(devices);
-        LogMessage("---->>>>>> Devices Count: " + devices.Count);
-        foreach (var device in devices)
-        {
-            LogMessage(device.name + " " + device.characteristics);
-        }
-
-        foreach (var device in devices)
-        {
-            if (device.characteristics.HasFlag(InputDeviceCharacteristics.Right))
-            {
-                rightController = device;
-                LogMessage("Right Controller found: " + rightController.name);
-            }
-            else if (device.characteristics.HasFlag(InputDeviceCharacteristics.Left))
-            {
-                leftController = device;
-                LogMessage("Left Controller found: " + leftController.name);
-            }
-            Debug.Log("Device: " + device.name + " " + device.characteristics);
-        }
-
-        logFileName = GetUniqueLogFileName();
-        nextHapticTime = Time.time + hapticInterval;
+        dashVideoPlayer = gameObject.GetComponent<DashVideoPlayer>();
+        fileIndex = GetNextLogFileIndex(); // Get the next available file index
+        logFileName = $"controller_inputs{fileIndex}.txt"; // Set the initial log file name
+        LogInput("InputTracker started.");
     }
 
     void Update()
     {
-        if (rightController.isValid)
-        {
-            LogControllerInput(rightController);
-        }
-        else
-        {
-            LogMessage("Right controller is not valid.");
-        }
-
-        if (leftController.isValid)
-        {
-            LogControllerInput(leftController);
-        }
-        else
-        {
-            LogMessage("Left controller is not valid.");
-        }
-
-        // Send haptic feedback every 5 seconds
-        if (Time.time >= nextHapticTime)
-        {
-            SendPeriodicHapticFeedback();
-            nextHapticTime = Time.time + hapticInterval;
-        }
+        // Other updates can go here if needed
     }
 
-    private void LogControllerInput(InputDevice controller)
+    public void SendImpulseAndTrackInput(int segmentNumber)
     {
-        bool anyButtonPressed = false;
-
-        if (controller.TryGetFeatureValue(CommonUsages.trigger, out float triggerValue) && triggerValue > 0)
+        trackQueueSize += 1;
+        if (trackQueueSize > 1)
         {
-            LogInput($"{controller.name} Trigger Value: " + triggerValue);
-            anyButtonPressed = true;
+            LogInput("Already waiting for input. Adding segment to queue.");
+            Debug.LogWarning("Already waiting for input. Adding segment to queue.");
+            inputQueue.Enqueue(new InputLogEntry(segmentNumber));
+            return;
         }
-        if (controller.TryGetFeatureValue(CommonUsages.grip, out float gripValue) && gripValue > 0)
-        {
-            LogInput($"{controller.name} Grip Value: " + gripValue);
-            anyButtonPressed = true;
-        }
-        if (controller.TryGetFeatureValue(CommonUsages.primaryButton, out bool primaryButtonValue) && primaryButtonValue)
-        {
-            LogInput($"{controller.name} Primary Button Value: " + primaryButtonValue);
-            anyButtonPressed = true;
-        }
-        if (controller.TryGetFeatureValue(CommonUsages.secondaryButton, out bool secondaryButtonValue) && secondaryButtonValue)
-        {
-            LogInput($"{controller.name} Secondary Button Value: " + secondaryButtonValue);
-            anyButtonPressed = true;
-        }
-        if (controller.TryGetFeatureValue(CommonUsages.primary2DAxis, out Vector2 primary2DAxisValue) && primary2DAxisValue != Vector2.zero)
-        {
-            LogInput($"{controller.name} Primary 2D Axis Value: " + primary2DAxisValue);
-            anyButtonPressed = true;
-        }
-        if (controller.TryGetFeatureValue(CommonUsages.secondary2DAxis, out Vector2 secondary2DAxisValue) && secondary2DAxisValue != Vector2.zero)
-        {
-            LogInput($"{controller.name} Secondary 2D Axis Value: " + secondary2DAxisValue);
-            anyButtonPressed = true;
-        }
-        if (controller.TryGetFeatureValue(CommonUsages.devicePosition, out Vector3 devicePositionValue))
-        {
-            LogInput($"{controller.name} Device Position Value: " + devicePositionValue);
-        }
-        if (controller.TryGetFeatureValue(CommonUsages.deviceRotation, out Quaternion deviceRotationValue))
-        {
-            LogInput($"{controller.name} Device Rotation Value: " + deviceRotationValue);
-        }
-        if (controller.TryGetFeatureValue(CommonUsages.isTracked, out bool isTrackedValue))
-        {
-            LogInput($"{controller.name} Is Tracked Value: " + isTrackedValue);
-        }
-        if (controller.TryGetFeatureValue(CommonUsages.deviceVelocity, out Vector3 deviceVelocityValue))
-        {
-            LogInput($"{controller.name} Device Velocity Value: " + deviceVelocityValue);
-        }
-        if (controller.TryGetFeatureValue(CommonUsages.deviceAngularVelocity, out Vector3 deviceAngularVelocityValue))
-        {
-            LogInput($"{controller.name} Device Angular Velocity Value: " + deviceAngularVelocityValue);
-        }
-        if (controller.TryGetFeatureValue(CommonUsages.deviceAcceleration, out Vector3 deviceAccelerationValue))
-        {
-            LogInput($"{controller.name} Device Acceleration Value: " + deviceAccelerationValue);
-        }
-
-        // Check and log if any buttons are pressed
-        if (anyButtonPressed)
-        {
-            SendHapticFeedback(controller);
-        }
-
-        TrackInput(controller);
+        StartCoroutine(WaitForButtonPressAndLog(segmentNumber));
     }
 
-    private void TrackInput(InputDevice device)
+    private IEnumerator WaitForButtonPressAndLog(int segmentNumber)
+    {
+        
+        LogInput($"Waiting for button press to log segment number {segmentNumber}...");
+
+        // Send impulse to both controllers
+        SendHapticImpulse(rightHand);
+        SendHapticImpulse(leftHand);
+
+        bool inputDetected = false;
+
+        while (!inputDetected)
+        {
+            if (CheckForButtonPress(rightHand) || CheckForButtonPress(leftHand))
+            {
+                inputDetected = true;
+                trackQueueSize -= 1;
+                LogInput($"Segment number {segmentNumber} logged with button press.");
+
+                // Log segment number and timestamp to "controller_inputsX.txt" file
+                string logMessage = $"Timestamp: {DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")}, Segment Number: {segmentNumber}";
+                File.AppendAllText(Path.Combine(Application.persistentDataPath, logFileName), logMessage + "\n");
+            }
+            else {
+                yield return null;
+            }
+            
+        }
+
+        // Check if there are queued inputs
+        Debug.Log("debug 19 ----->>>>> Queue size: " + inputQueue.Count);
+        if (inputQueue.Count > 0)
+        {
+            InputLogEntry nextInput = inputQueue.Dequeue();
+            Debug.Log("debug 19 ----->>>>> Queue size: " + inputQueue.Count);
+            StartCoroutine(WaitForButtonPressAndLog(nextInput.segmentNumber));
+        }
+        else
+        {
+            Debug.Log("debug 19 ----->>>>> testing dash player instance laoded");
+            Debug.Log("debug 19 ----->>>>> Dash testing segment number " + dashVideoPlayer.segmentNumber);
+            trackQueueSize = 0;
+            Debug.Log("debug 19 ----->>>>>Setting Queue size for dash player: " + inputQueue.Count);
+            dashVideoPlayer.EndPlaybackAndCleanup();
+        }
+
+        
+    }
+
+    private bool CheckForButtonPress(XRNode hand)
     {
         List<InputFeatureUsage> features = new List<InputFeatureUsage>();
-        device.TryGetFeatureUsages(features);
+        InputDevice device = InputDevices.GetDeviceAtXRNode(hand);
 
-        foreach (var feature in features)
+        if (device.isValid)
         {
-            if (feature.type == typeof(bool))
+            device.TryGetFeatureUsages(features);
+
+            foreach (var feature in features)
             {
-                bool value;
-                if (device.TryGetFeatureValue(feature.As<bool>(), out value) && value)
+                if (feature.type == typeof(bool))
                 {
-                    LogInput($"---->>>>>>>>>> {device.name} - {feature.name} pressed");
-                    SendHapticFeedback(device);
+                    bool value;
+                    if (device.TryGetFeatureValue(feature.As<bool>(), out value) && value)
+                    {
+                       if(feature.name!="IsTracked") { 
+                            SendHapticImpulse(rightHand);
+                            LogInput($"{hand} - {feature.name} pressed");
+                            
+                            return true;
+                             } // Send haptic feedback on button press
+                    }
                 }
             }
+        }
+        return false;
+    }
+
+    private void SendHapticImpulse(XRNode hand)
+    {
+        InputDevice device = InputDevices.GetDeviceAtXRNode(hand);
+
+        if (device.isValid)
+        {
+            HapticCapabilities capabilities;
+            if (device.TryGetHapticCapabilities(out capabilities) && capabilities.supportsImpulse)
+            {
+                uint channel = 0;
+                device.SendHapticImpulse(channel, 0.85f, 0.4f); // Adjust intensity and duration as needed
+                LogInput($"Haptic feedback sent to {hand}.");
+            }
+            else
+            {
+                LogInput($"Haptic feedback not supported for {hand}.");
+            }
+        }
+        else
+        {
+            LogInput($"{hand} device is not valid for haptic feedback.");
         }
     }
 
     private void LogInput(string message)
     {
-        Debug.Log(message);
-        File.AppendAllText(logFileName, message + "\n");
+        Debug.Log("debug 19 --->>>> " + message);
+        File.AppendAllText(Path.Combine(Application.persistentDataPath, logFileName), message + "\n");
     }
 
-    private void SendHapticFeedback(InputDevice controller)
+    private int GetNextLogFileIndex()
     {
-        controller.SendHapticImpulse(0, 0.5f, 0.1f); // Adjust intensity and duration as needed
-    }
-
-    private void SendPeriodicHapticFeedback()
-    {
-        if (rightController.isValid)
+        int index = 0;
+        while (File.Exists(Path.Combine(Application.persistentDataPath, $"controller_inputs{index}.txt")))
         {
-            rightController.SendHapticImpulse(0, 0.5f, 0.1f);
+            index++;
         }
-        if (leftController.isValid)
-        {
-            leftController.SendHapticImpulse(0, 0.5f, 0.1f);
-        }
+        return index;
     }
 
-    private void LogMessage(string message)
+    private struct InputLogEntry
     {
-        Debug.Log(message);
-        File.AppendAllText(logFileName, message + "\n");
-    }
+        public int segmentNumber;
 
-    private string GetUniqueLogFileName()
-    {
-        string baseFileName = "InputControllers_logs";
-        string extension = ".txt";
-        string fileName = $"{baseFileName}{fileIndex}{extension}";
-
-        while (File.Exists(fileName))
+        public InputLogEntry(int segmentNumber)
         {
-            fileIndex++;
-            fileName = $"{baseFileName}{fileIndex}{extension}";
+            this.segmentNumber = segmentNumber;
         }
-
-        return fileName;
     }
 }

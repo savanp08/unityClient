@@ -1,160 +1,145 @@
+// Purpose: This script is used to manage the buffer of the video player. It keeps track of the segments that are currently in the buffer and removes the oldest segment when the buffer is full. The buffer size can be set to a specific value (N) and the current buffer size can be retrieved. The buffer queue can also be retrieved if needed. This script is a singleton and should be attached to an empty GameObject in the scene.
+//Imports:
+using System.Collections;
 using System.Collections.Generic;
-using System.IO;
 using UnityEngine;
+using System;
+using System.IO;
 
 public class BufferManager : MonoBehaviour
 {
     private static BufferManager instance;
-
     public static BufferManager Instance
     {
         get
         {
             if (instance == null)
             {
-                GameObject obj = new GameObject("BufferManager");
-                instance = obj.AddComponent<BufferManager>();
-                DontDestroyOnLoad(obj);
+                GameObject bufferManagerObject = new GameObject("BufferManager");
+                instance = bufferManagerObject.AddComponent<BufferManager>();
             }
             return instance;
         }
     }
 
-    private List<string> bufferQueue = new List<string>();
+    private Queue<string> bufferQueue = new Queue<string>();
+    private string buffermanagerLog = "";
+    private int bufferCapacity = 2; // Default buffer capacity (changeable)
+    private DateTime startTime;
 
-    // Constructor should be private to prevent instantiation
-    private BufferManager() { }
-
-    // Ensure InitializeBufferQueue is public
-    public void InitializeBufferQueue()
+    void Awake()
     {
-        string bufferQueueFolder = Path.Combine("/home/mobisec/Desktop/optiplex/pensive-PyTorch-Temp/temp/Videos");
-if(GetPlatformCode() == 'W' || GetPlatformCode() == 'A'){
-            bufferQueueFolder = Path.Combine(Application.persistentDataPath, "Videos");
-        }
-        if (!Directory.Exists(bufferQueueFolder))
+        // Singleton pattern to keep only one instance of BufferManager
+        if (instance == null)
         {
-            Directory.CreateDirectory(bufferQueueFolder);
+            instance = this;
+            DontDestroyOnLoad(gameObject);
+            startTime = DateTime.Now;
         }
-    }
-
-    public void AddToBuffer(string filePath)
-    {
-        bufferQueue.Add(filePath);
-    }
-
-    public bool IsSegmentAvailable(int segmentNumber)
-    {
-
-       string filePath = Path.Combine("/home/mobisec/Desktop/optiplex/pensive-PyTorch-Temp/temp/Videos", "segment" + segmentNumber + ".webm");
-       if(GetPlatformCode() == 'W' || GetPlatformCode() == 'A'){
-            filePath = Path.Combine(Application.persistentDataPath, "segment" + segmentNumber + ".mp4");
+        else
+        {
+            Destroy(gameObject);
         }
-        return File.Exists(filePath);
+        buffermanagerLog = Path.Combine(Application.persistentDataPath, "BufferManagerLog.txt");
     }
 
-    public string GetNextSegment()
+    // Set buffer size to a specific value (N)
+    public void SetBufferSize(int size)
+    {
+        File.AppendAllText(buffermanagerLog, $"{GetTimestamp()} Buffer size set to: {size}\n");
+        bufferCapacity = size;
+    }
+
+    public int GetMaxBufferSize()
+    {
+        return bufferCapacity;
+    }
+
+    // Return the current buffer size (number of elements in the buffer)
+    public int GetBufferSize()
+    {
+        return bufferQueue.Count;
+    }
+
+    // Add a segment to the buffer
+    public void AddToBuffer(string segmentPath)
+    {
+        if (bufferQueue.Count >= bufferCapacity)
+        {
+            File.AppendAllText(buffermanagerLog, $"{GetTimestamp()} Buffer is full. Cannot add segment: {segmentPath}\n");
+            return;
+        }
+
+        bufferQueue.Enqueue(segmentPath);
+        File.AppendAllText(buffermanagerLog, $"{GetTimestamp()} Segment added to buffer: {segmentPath}\n");
+        File.AppendAllText(buffermanagerLog, $"{GetTimestamp()} Current buffer size: {bufferQueue.Count}\n");
+        Debug.Log("Segment added to buffer. Current buffer size: " + bufferQueue.Count);
+    }
+
+    // Remove the oldest segment from the buffer
+    public void RemoveFromBuffer( )
     {
         if (bufferQueue.Count > 0)
         {
-            string nextSegment = bufferQueue[0];
-            bufferQueue.RemoveAt(0);
-            return nextSegment;
+            string removedSegment = bufferQueue.Dequeue();
+            File.AppendAllText(buffermanagerLog, $"{GetTimestamp()} Removed segment from buffer: {removedSegment}\n");
+            File.AppendAllText(buffermanagerLog, $"{GetTimestamp()} Current buffer size: {bufferQueue.Count}\n");
+            Debug.Log("Removed segment from buffer: " + removedSegment);
         }
-        return null;
+        else
+        {
+            File.AppendAllText(buffermanagerLog, $"{GetTimestamp()} Buffer is empty. Cannot remove segment.\n");
+            Debug.Log("Buffer is empty. Cannot remove segment.");
+        }
     }
 
-    public List<string> GetBufferQueue()
+    // Get the current buffer queue (optional method)
+    public Queue<string> GetBufferQueue()
     {
         return bufferQueue;
     }
 
-    public bool HasSegments()
+    // Get timestamp in seconds since start
+    private string GetTimestamp()
     {
-        return bufferQueue.Count > 0;
+        TimeSpan elapsedTime = DateTime.Now - startTime;
+        return $"[{elapsedTime.TotalSeconds:F2}s]";
     }
-
-    
-     public static char GetPlatformCode()
+    public bool isSegmentFirstInBuffer(string path)
     {
-        #if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
-        return 'W'; // Windows
-        #elif UNITY_EDITOR_LINUX || UNITY_STANDALONE_LINUX
-        return 'L'; // Linux
-        #elif UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
-        return 'M'; // macOS
-        #elif UNITY_ANDROID
-        return 'A'; // Android
-        #elif UNITY_IOS
-        return 'I'; // iOS
-        #else
-        return 'U'; // Unknown or unsupported platform
-        #endif
+        if (bufferQueue.Count > 0)
+        {
+            string firstSegment = bufferQueue.Peek();
+            if(firstSegment.Contains(path))
+            {
+                File.AppendAllText(buffermanagerLog, $"{GetTimestamp()} Segment {path} is first in buffer\n");
+            }
+            else{
+                File.AppendAllText(buffermanagerLog, $"{GetTimestamp()} Segment {path} is not first in buffer\n");
+            }   
+            return firstSegment.Contains(path);
+        }
+        return false;
+
+    }
+    
+    public string GetFirstSegmentInBuffer()
+    {
+        if (bufferQueue.Count > 0)
+        {
+            return bufferQueue.Peek();
+        }
+        return "";
+    }
+    public void printQueue()
+    {
+        Debug.Log("-->>>> debug 19 Printing buffer queue");
+        // create new queue to iterate over
+        Queue<string> tempQueue = new Queue<string>(bufferQueue);
+        while(tempQueue.Count > 0)
+        {
+            string segment = tempQueue.Dequeue();
+            Debug.Log("---->>> debug 19 printing buffer : segment: " + segment);
+        }
     }
 }
-
-
-// using System.Collections.Generic;
-// using System.IO;
-// using UnityEngine;
-
-// public class BufferManager : MonoBehaviour
-// {
-//     private static BufferManager instance;
-
-//     public static BufferManager Instance
-//     {
-//         get
-//         {
-//             if (instance == null)
-//             {
-//                 GameObject obj = new GameObject("BufferManager");
-//                 instance = obj.AddComponent<BufferManager>();
-//                 DontDestroyOnLoad(obj);
-//             }
-//             return instance;
-//         }
-//     }
-
-//     private List<string> bufferQueue = new List<string>();
-
-//     // Constructor should be private to prevent instantiation
-//     private BufferManager() { }
-
-//     // Ensure InitializeBufferQueue is public
-//     public void InitializeBufferQueue()
-//     {
-//         string bufferQueueFolder = Path.Combine(Application.persistentDataPath);
-//         if (!Directory.Exists(bufferQueueFolder))
-//         {
-//             Directory.CreateDirectory(bufferQueueFolder);
-//         }
-//     }
-
-//     public void AddToBuffer(string filePath)
-//     {
-//         bufferQueue.Add(filePath);
-//     }
-
-//     public bool IsSegmentAvailable(int segmentNumber)
-//     {
-//         string filePath = Path.Combine(Application.persistentDataPath, "segment" + segmentNumber + ".mp4");
-//         return File.Exists(filePath);
-//     }
-
-//     public string GetNextSegment()
-//     {
-//         if (bufferQueue.Count > 0)
-//         {
-//             string nextSegment = bufferQueue[0];
-//             bufferQueue.RemoveAt(0);
-//             return nextSegment;
-//         }
-//         return null;
-//     }
-
-//     public List<string> GetBufferQueue()
-//     {
-//         return bufferQueue;
-//     }
-// }

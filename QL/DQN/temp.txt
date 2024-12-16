@@ -1,0 +1,6 @@
+DQN : 36.789
+Pens : 21.3258
+buffer based: (no bio) : avg 12.566
+rate based: 8.654
+dash : 15.115
+

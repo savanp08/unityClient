@@ -10,16 +10,46 @@ using Debug = UnityEngine.Debug;
 
 public class EyeQoEMetricsLogger : MonoBehaviour
 {
-    private EyeManager eyeManager;
-    private Stopwatch stopwatch;
-    private string logFilePath;
-    private int fileIndex = 1;
-    private ulong sequenceNumber = 0;
-    private ulong segmentNumber = 0;
-    private bool isLogging = false;
+    public EyeManager eyeManager;
+    public Stopwatch stopwatch;
+    public string logFilePath;
+    public string csvFilePath;
+    public string mlLogFilePath = "";
+    public StreamWriter csvWriter;
+    public int fileIndex = 1;
+    public ulong sequenceNumber = 0;
+    public ulong segmentNumber = 0;
+    public bool isLogging = false;
+    public DashVideoMaster dashVideoMaster;
+
+    public const int MaxSegments = 15;
+    public List<SegmentData> segmentEyeDataBuffer;
+    public SegmentStatus[] segmentStatuses;
+    
+    public enum SegmentStatus
+    {
+        Recording,
+        ReadyForModel,
+        CollectedByModel
+    }
+
+    public class SegmentData
+    {
+        public ulong SegmentNumber;
+        public List<Dictionary<string, object>> EyeDataEntries;
+        public ulong TotalEyeDataEntries;  // Track the number of eye data entries logged for this segment
+
+        public SegmentData(ulong segmentNumber)
+        {
+            SegmentNumber = segmentNumber;
+            EyeDataEntries = new List<Dictionary<string, object>>();
+            TotalEyeDataEntries = 0; // Initialize metadata
+        }
+    }
 
     void Awake()
     {
+        if (EyeManager.Instance != null) { EyeManager.Instance.EnableEyeTracking = true; }
         GameObject eyeManagerObject = GameObject.Find("EyeManager");
         if (eyeManagerObject != null)
         {
@@ -35,6 +65,9 @@ public class EyeQoEMetricsLogger : MonoBehaviour
                     fileIndex++;
                     logFilePath = Path.Combine(Application.persistentDataPath, $"eye_metrics_log_{fileIndex}.txt");
                 }
+                mlLogFilePath = Path.Combine(Application.persistentDataPath, $"ml_interaction_log_{fileIndex}.txt");
+                InitializeSegmentBuffers();
+                InitializeCSVLogging();
             }
             else
             {
@@ -45,8 +78,26 @@ public class EyeQoEMetricsLogger : MonoBehaviour
         {
             Debug.LogError("EyeManager GameObject not found in the scene.");
         }
+    }
+
+    void InitializeCSVLogging()
+    {
+        csvFilePath = Path.Combine(Application.persistentDataPath, $"EyeTrackingData_{fileIndex}_video{dashVideoMaster.currentVideoID}_quality{dashVideoMaster.currentQualityIndex}.csv");
+        csvWriter = new StreamWriter(csvFilePath, true);
+        // Write CSV header
+        csvWriter.WriteLine("Timestamp,SequenceNumber,SegmentNumber,LeftEyeOriginX,LeftEyeOriginY,LeftEyeOriginZ,RightEyeOriginX,RightEyeOriginY,RightEyeOriginZ,CombinedEyeOriginX,CombinedEyeOriginY,CombinedEyeOriginZ,LeftEyeDirectionX,LeftEyeDirectionY,LeftEyeDirectionZ,RightEyeDirectionX,RightEyeDirectionY,RightEyeDirectionZ,CombinedEyeDirectionX,CombinedEyeDirectionY,CombinedEyeDirectionZ,LeftEyeOpenness,RightEyeOpenness,LeftEyePupilDiameter,RightEyePupilDiameter,LeftEyePupilPositionX,LeftEyePupilPositionY,RightEyePupilPositionX,RightEyePupilPositionY,HeadPosePositionX,HeadPosePositionY,HeadPosePositionZ,HeadPoseRotationX,HeadPoseRotationY,HeadPoseRotationZ");
+    }
+
+    void InitializeSegmentBuffers()
+    {
+        segmentEyeDataBuffer = new List<SegmentData>(MaxSegments);
+        segmentStatuses = new SegmentStatus[MaxSegments];
         
-        
+        for (int i = 0; i < MaxSegments; i++)
+        {
+            segmentEyeDataBuffer.Add(new SegmentData((ulong)i));
+            segmentStatuses[i] = SegmentStatus.Recording;
+        }
     }
 
     public void StartLoggingEverySecond()
@@ -54,7 +105,7 @@ public class EyeQoEMetricsLogger : MonoBehaviour
         if (!isLogging)
         {
             isLogging = true;
-            InvokeRepeating(nameof(CollectAndLogEyeData), 0f, 1f);
+            InvokeRepeating(nameof(CollectAndLogEyeData), 0f, 0.005f);
         }
     }
 
@@ -64,12 +115,17 @@ public class EyeQoEMetricsLogger : MonoBehaviour
         {
             isLogging = false;
             CancelInvoke(nameof(CollectAndLogEyeData));
+            csvWriter.Close();
         }
     }
 
     public void IncreaseSegmentNumber()
     {
-        ++segmentNumber;
+        int currentSegmentIndex = (int)(segmentNumber % MaxSegments);
+        segmentStatuses[currentSegmentIndex] = SegmentStatus.ReadyForModel;
+
+        segmentNumber++;
+        segmentEyeDataBuffer[currentSegmentIndex] = new SegmentData(segmentNumber - 1);  // Reset for next segment, keep the old segment number for the newly reset segment
     }
 
     public void CollectAndLogEyeData()
@@ -95,62 +151,107 @@ public class EyeQoEMetricsLogger : MonoBehaviour
             if (!isEyeTrackingAvailable || status == EyeTrackingStatus.NOT_START)
             {
                 Debug.Log("--->>> Eye Tracking is not available or not started. Attempting to start...");
-                
+                LogMLInteraction("Eye Tracking is not available or not started.");
             }
 
-            if (eyeManager.GetEyeOrigin(EyeType.Combined, out Vector3 combinedEyeOrigin))
+            Vector3 leftEyeOrigin, rightEyeOrigin, combinedEyeOrigin;
+            Vector3 leftEyeDirection, rightEyeDirection, combinedEyeDirection;
+            float leftEyeOpenness, rightEyeOpenness;
+            float leftEyePupilDiameter, rightEyePupilDiameter;
+            Vector2 leftEyePupilPositionInSensorArea, rightEyePupilPositionInSensorArea;
+
+            // Collect eye tracking data from EyeManager
+            eyeManager.GetEyeOrigin(EyeType.Combined, out combinedEyeOrigin);
+            eyeManager.GetEyeDirectionNormalized(EyeType.Combined, out combinedEyeDirection);
+            eyeManager.GetEyeOrigin(EyeType.Left, out leftEyeOrigin);
+            eyeManager.GetEyeDirectionNormalized(EyeType.Left, out leftEyeDirection);
+            eyeManager.GetLeftEyeOpenness(out leftEyeOpenness);
+            eyeManager.GetLeftEyePupilDiameter(out leftEyePupilDiameter);
+            eyeManager.GetLeftEyePupilPositionInSensorArea(out leftEyePupilPositionInSensorArea);
+            eyeManager.GetEyeOrigin(EyeType.Right, out rightEyeOrigin);
+            eyeManager.GetEyeDirectionNormalized(EyeType.Right, out rightEyeDirection);
+            eyeManager.GetRightEyeOpenness(out rightEyeOpenness);
+            eyeManager.GetRightEyePupilDiameter(out rightEyePupilDiameter);
+            eyeManager.GetRightEyePupilPositionInSensorArea(out rightEyePupilPositionInSensorArea);
+
+            // Fall back to retry getting pupil diameter if it returns zero
+            if (leftEyePupilDiameter == 0)
             {
-                eyeData["CombinedEyeOrigin"] = new SerializableVector3(combinedEyeOrigin);
+                EyeManager.Instance.GetLeftEyePupilDiameter(out leftEyePupilDiameter);
             }
-            if (eyeManager.GetEyeDirectionNormalized(EyeType.Combined, out Vector3 combinedEyeDirection))
+            if (rightEyePupilDiameter == 0)
             {
-                eyeData["CombinedEyeDirection"] = new SerializableVector3(combinedEyeDirection);
-            }
-            if (eyeManager.GetEyeOrigin(EyeType.Left, out Vector3 leftEyeOrigin))
-            {
-                eyeData["LeftEyeOrigin"] = new SerializableVector3(leftEyeOrigin);
-            }
-            if (eyeManager.GetEyeDirectionNormalized(EyeType.Left, out Vector3 leftEyeDirection))
-            {
-                eyeData["LeftEyeDirection"] = new SerializableVector3(leftEyeDirection);
-            }
-            if (eyeManager.GetLeftEyeOpenness(out float leftEyeOpenness))
-            {
-                eyeData["LeftEyeOpenness"] = leftEyeOpenness;
-            }
-            if (eyeManager.GetLeftEyePupilDiameter(out float leftEyePupilDiameter))
-            {
-                eyeData["LeftEyePupilDiameter"] = leftEyePupilDiameter;
-            }
-            if (eyeManager.GetLeftEyePupilPositionInSensorArea(out Vector2 leftEyePupilPositionInSensorArea))
-            {
-                eyeData["LeftEyePupilPositionInSensorArea"] = new SerializableVector2(leftEyePupilPositionInSensorArea);
-            }
-            if (eyeManager.GetEyeOrigin(EyeType.Right, out Vector3 rightEyeOrigin))
-            {
-                eyeData["RightEyeOrigin"] = new SerializableVector3(rightEyeOrigin);
-            }
-            if (eyeManager.GetEyeDirectionNormalized(EyeType.Right, out Vector3 rightEyeDirection))
-            {
-                eyeData["RightEyeDirection"] = new SerializableVector3(rightEyeDirection);
-            }
-            if (eyeManager.GetRightEyeOpenness(out float rightEyeOpenness))
-            {
-                eyeData["RightEyeOpenness"] = rightEyeOpenness;
-            }
-            if (eyeManager.GetRightEyePupilDiameter(out float rightEyePupilDiameter))
-            {
-                eyeData["RightEyePupilDiameter"] = rightEyePupilDiameter;
-            }
-            if (eyeManager.GetRightEyePupilPositionInSensorArea(out Vector2 rightEyePupilPositionInSensorArea))
-            {
-                eyeData["RightEyePupilPositionInSensorArea"] = new SerializableVector2(rightEyePupilPositionInSensorArea);
+                EyeManager.Instance.GetRightEyePupilDiameter(out rightEyePupilDiameter);
             }
 
             // Additional data for reinforcement learning analysis
-            eyeData["HeadPosePosition"] = new SerializableVector3(Camera.main.transform.position);
-            eyeData["HeadPoseRotation"] = new SerializableVector3(Camera.main.transform.eulerAngles);
+            Vector3 headPosePosition = Camera.main.transform.position;
+            Vector3 headPoseRotation = Camera.main.transform.eulerAngles;
 
+            // Adding all necessary data to eyeData dictionary
+            eyeData["LeftEyeOriginX"] = leftEyeOrigin.x;
+            eyeData["LeftEyeOriginY"] = leftEyeOrigin.y;
+            eyeData["LeftEyeOriginZ"] = leftEyeOrigin.z;
+            
+            eyeData["RightEyeOriginX"] = rightEyeOrigin.x;
+            eyeData["RightEyeOriginY"] = rightEyeOrigin.y;
+            eyeData["RightEyeOriginZ"] = rightEyeOrigin.z;
+            
+            eyeData["CombinedEyeOriginX"] = combinedEyeOrigin.x;
+            eyeData["CombinedEyeOriginY"] = combinedEyeOrigin.y;
+            eyeData["CombinedEyeOriginZ"] = combinedEyeOrigin.z;
+            
+            eyeData["LeftEyeDirectionX"] = leftEyeDirection.x;
+            eyeData["LeftEyeDirectionY"] = leftEyeDirection.y;
+            eyeData["LeftEyeDirectionZ"] = leftEyeDirection.z;
+            
+            eyeData["RightEyeDirectionX"] = rightEyeDirection.x;
+            eyeData["RightEyeDirectionY"] = rightEyeDirection.y;
+            eyeData["RightEyeDirectionZ"] = rightEyeDirection.z;
+            
+            eyeData["CombinedEyeDirectionX"] = combinedEyeDirection.x;
+            eyeData["CombinedEyeDirectionY"] = combinedEyeDirection.y;
+            eyeData["CombinedEyeDirectionZ"] = combinedEyeDirection.z;
+            
+            eyeData["LeftEyeOpenness"] = leftEyeOpenness;
+            eyeData["RightEyeOpenness"] = rightEyeOpenness;
+            
+            eyeData["LeftEyePupilDiameter"] = leftEyePupilDiameter;
+            eyeData["RightEyePupilDiameter"] = rightEyePupilDiameter;
+            
+            eyeData["LeftEyePupilPositionX"] = leftEyePupilPositionInSensorArea.x;
+            eyeData["LeftEyePupilPositionY"] = leftEyePupilPositionInSensorArea.y;
+            
+            eyeData["RightEyePupilPositionX"] = rightEyePupilPositionInSensorArea.x;
+            eyeData["RightEyePupilPositionY"] = rightEyePupilPositionInSensorArea.y;
+            
+            eyeData["HeadPosePositionX"] = headPosePosition.x;
+            eyeData["HeadPosePositionY"] = headPosePosition.y;
+            eyeData["HeadPosePositionZ"] = headPosePosition.z;
+            
+            eyeData["HeadPoseRotationX"] = headPoseRotation.x;
+            eyeData["HeadPoseRotationY"] = headPoseRotation.y;
+            eyeData["HeadPoseRotationZ"] = headPoseRotation.z;
+
+            // Store the eye data in the current segment's buffer
+            int currentSegmentIndex = (int)(segmentNumber % MaxSegments);
+            if (segmentStatuses[currentSegmentIndex] == SegmentStatus.Recording)
+            {
+                SegmentData currentSegment = segmentEyeDataBuffer[currentSegmentIndex];
+                currentSegment.EyeDataEntries.Add(eyeData);
+                currentSegment.TotalEyeDataEntries++;  // Update the number of entries for the current segment
+                Debug.Log($"Eye data added to segment {currentSegmentIndex}. Total entries: {currentSegment.TotalEyeDataEntries}");
+                LogMLInteraction($"Eye data added to segment {currentSegmentIndex}. Total entries: {currentSegment.TotalEyeDataEntries}");
+            }
+
+            // Write to CSV
+            string csvLine = $"{stopwatch.Elapsed.TotalMilliseconds},{sequenceNumber},{segmentNumber},{leftEyeOrigin.x},{leftEyeOrigin.y},{leftEyeOrigin.z},{rightEyeOrigin.x},{rightEyeOrigin.y},{rightEyeOrigin.z},{combinedEyeOrigin.x},{combinedEyeOrigin.y},{combinedEyeOrigin.z},{leftEyeDirection.x},{leftEyeDirection.y},{leftEyeDirection.z},{rightEyeDirection.x},{rightEyeDirection.y},{rightEyeDirection.z},{combinedEyeDirection.x},{combinedEyeDirection.y},{combinedEyeDirection.z},{leftEyeOpenness},{rightEyeOpenness},{leftEyePupilDiameter},{rightEyePupilDiameter},{leftEyePupilPositionInSensorArea.x},{leftEyePupilPositionInSensorArea.y},{rightEyePupilPositionInSensorArea.x},{rightEyePupilPositionInSensorArea.y},{headPosePosition.x},{headPosePosition.y},{headPosePosition.z},{headPoseRotation.x},{headPoseRotation.y},{headPoseRotation.z}";
+            csvWriter.WriteLine(csvLine);
+            csvWriter.Flush();
+            Debug.Log("Eye data written to CSV.");
+            LogMLInteraction("Eye data written to CSV.");
+
+            // Log data as JSON for potential other use cases
             string jsonData = JsonConvert.SerializeObject(eyeData, Formatting.Indented);
             Log(jsonData);
 
@@ -159,10 +260,48 @@ public class EyeQoEMetricsLogger : MonoBehaviour
         else
         {
             Debug.LogError("EyeManager instance is not available.");
+            LogMLInteraction("EyeManager instance is not available.");
         }
     }
 
-    private void Log(string message)
+    public SegmentData GetSegmentData(int segmentIndex)
+    {
+        Debug.Log($"Requested segment data for index {segmentIndex}");
+        LogMLInteraction($"Requested segment data for index {segmentIndex}");
+        if (segmentIndex >= MaxSegments)
+        {
+            Debug.LogError("Requested segment index exceeds maximum buffer size.");
+            LogMLInteraction("Requested segment index exceeds maximum buffer size.");
+            return null;
+        }
+
+        if (segmentStatuses[segmentIndex] == SegmentStatus.ReadyForModel)
+        {
+            SegmentData segmentData = segmentEyeDataBuffer[segmentIndex];
+
+            // Validate that the segment index matches the segment number
+            if (segmentData != null && segmentData.SegmentNumber == (ulong)segmentIndex)
+            {
+                segmentStatuses[segmentIndex] = SegmentStatus.CollectedByModel;
+                Debug.Log($"Segment data for index {segmentIndex} is ready and collected.");
+                LogMLInteraction($"Segment data for index {segmentIndex} is ready and collected.");
+                return segmentData;
+            }
+            else
+            {
+                Debug.LogError($"Mismatch in requested segment number for index {segmentIndex}");
+                LogMLInteraction($"Mismatch in requested segment number for index {segmentIndex}");
+            }
+        }
+        else
+        {
+            Debug.LogError("Requested segment data is not ready or already collected.");
+            LogMLInteraction("Requested segment data is not ready or already collected.");
+        }
+        return null;
+    }
+
+    public void Log(string message)
     {
         using (StreamWriter writer = new StreamWriter(logFilePath, true))
         {
@@ -170,280 +309,11 @@ public class EyeQoEMetricsLogger : MonoBehaviour
         }
     }
 
-    public class SerializableVector3
+    public void LogMLInteraction(string message)
     {
-        public float x;
-        public float y;
-        public float z;
-
-        public SerializableVector3(Vector3 vector)
+        using (StreamWriter writer = new StreamWriter(mlLogFilePath, true))
         {
-            x = vector.x;
-            y = vector.y;
-            z = vector.z;
-        }
-    }
-
-    public class SerializableVector2
-    {
-        public float x;
-        public float y;
-
-        public SerializableVector2(Vector2 vector)
-        {
-            x = vector.x;
-            y = vector.y;
-        }
-    }
-
-    public void TestEyeTracking()
-    {
-        if (eyeManager != null)
-        {
-            eyeManager.EnableEyeTracking = true;
-            Debug.Log("->>>>>>> Test Eye track : Enabling eye tracking.");
-            
-            bool isEyeTrackingAvailable = eyeManager.IsEyeTrackingAvailable();
-            bool hasEyeTrackingData = eyeManager.HasEyeTrackingData();
-            EyeTrackingStatus status2 = eyeManager.GetEyeTrackingStatus();
-            Debug.Log("->>>>>>> Test Eye track : Eye tracking status: " + status2);
-        
-
-            if (eyeManager.IsEyeTrackingAvailable())
-            {
-                Debug.Log("->>>>>>> Test Eye track : Eye tracking is available.");
-                if (eyeManager.HasEyeTrackingData())
-                {
-                    Debug.Log("->>>>>>> Test Eye track : Eye data is available.");
-                }
-                else
-                {
-                    Debug.Log("->>>>>>> Test Eye track : Eye data is not available.");
-                }
-            }
-            else
-            {
-                Debug.Log("->>>>>>> Test Eye track : Eye tracking is not available.");
-                
-                
-            }
-
-            EyeTrackingStatus status = eyeManager.GetEyeTrackingStatus();
-            Debug.Log("->>>>>>> Test Eye track : Eye tracking status: " + status);
-        }
-        else
-        {
-            Debug.LogError("EyeManager instance is not available in TestEyeTracking.");
+            writer.WriteLine($"{System.DateTime.Now}: {message}");
         }
     }
 }
-
-
-// using Newtonsoft.Json;
-// using System.Collections.Generic;
-// using System.Diagnostics;
-// using System.IO;
-// using UnityEngine;
-// using Wave.Essence;
-// using Wave.Essence.Eye;
-// using static Wave.Essence.Eye.EyeManager;
-// using Debug = UnityEngine.Debug;
-
-// public class EyeQoEMetricsLogger : MonoBehaviour
-// {
-//     private EyeManager eyeManager;
-//     private Stopwatch stopwatch;
-//     private string logFilePath;
-//     private int fileIndex = 1;
-//     private ulong sequenceNumber = 0;
-//     private ulong segmentNumber = 0;
-//     private bool isLogging = false;
-
-//     void Awake()
-//     {
-//         GameObject eyeManagerObject = GameObject.Find("EyeManager");
-//         if (eyeManagerObject != null)
-//         {
-//             Debug.Log("--->>>  EyeManager component found.");
-//             eyeManager = eyeManagerObject.GetComponent<EyeManager>();
-//             if (eyeManager != null)
-//             {
-//                 Debug.Log("--->>>  EyeManager component enabled.");
-//                 stopwatch = Stopwatch.StartNew();
-//                 logFilePath = Path.Combine(Application.persistentDataPath, $"eye_metrics_log_{fileIndex}.txt");
-//                 while (File.Exists(logFilePath))
-//                 {
-//                     fileIndex++;
-//                     logFilePath = Path.Combine(Application.persistentDataPath, $"eye_metrics_log_{fileIndex}.txt");
-//                 }
-//             }
-//             else
-//             {
-//                 Debug.LogError("EyeManager component not found on EyeManager GameObject.");
-//             }
-//         }
-//         else
-//         {
-//             Debug.LogError("EyeManager GameObject not found in the scene.");
-//         }
-//         InvokeRepeating(nameof(TestEyeTracking), 0f, 0.2f);
-//         StartLoggingEverySecond();
-//     }
-
-//     public void StartLoggingEverySecond()
-//     {
-//         if (!isLogging)
-//         {
-//             isLogging = true;
-//             InvokeRepeating(nameof(CollectAndLogEyeData), 0f, 1f);
-//         }
-//     }
-
-//     public void StopLogging()
-//     {
-//         if (isLogging)
-//         {
-//             isLogging = false;
-//             CancelInvoke(nameof(CollectAndLogEyeData));
-//         }
-//     }
-
-//     public void IncreaseSegmentNumber()
-//     {
-//         ++segmentNumber;
-//     }
-
-//     public void CollectAndLogEyeData()
-//     {
-//         Dictionary<string, object> eyeData = new Dictionary<string, object>
-//         {
-//             { "TimeStamp", stopwatch.Elapsed.TotalMilliseconds },
-//             { "SequenceNumber", sequenceNumber },
-//             { "SegmentNumber", segmentNumber },
-//             { "DataType", "Eye" }
-//         };
-
-//         bool isEyeTrackingAvailable = eyeManager.IsEyeTrackingAvailable();
-//         bool hasEyeTrackingData = eyeManager.HasEyeTrackingData();
-//         if (EyeManager.Instance != null) { EyeManager.Instance.EnableEyeTracking = true; }
-
-//         eyeData["IsEyeTrackingAvailable"] = isEyeTrackingAvailable;
-//         eyeData["HasEyeTrackingData"] = hasEyeTrackingData;
-
-//         if (eyeManager.GetEyeOrigin(EyeType.Combined, out Vector3 combinedEyeOrigin))
-//         {
-//             eyeData["CombinedEyeOrigin"] = new SerializableVector3(combinedEyeOrigin);
-//         }
-//         if (eyeManager.GetEyeDirectionNormalized(EyeType.Combined, out Vector3 combinedEyeDirection))
-//         {
-//             eyeData["CombinedEyeDirection"] = new SerializableVector3(combinedEyeDirection);
-//         }
-//         if (eyeManager.GetEyeOrigin(EyeType.Left, out Vector3 leftEyeOrigin))
-//         {
-//             eyeData["LeftEyeOrigin"] = new SerializableVector3(leftEyeOrigin);
-//         }
-//         if (eyeManager.GetEyeDirectionNormalized(EyeType.Left, out Vector3 leftEyeDirection))
-//         {
-//             eyeData["LeftEyeDirection"] = new SerializableVector3(leftEyeDirection);
-//         }
-//         if (eyeManager.GetLeftEyeOpenness(out float leftEyeOpenness))
-//         {
-//             eyeData["LeftEyeOpenness"] = leftEyeOpenness;
-//         }
-//         if (eyeManager.GetLeftEyePupilDiameter(out float leftEyePupilDiameter))
-//         {
-//             eyeData["LeftEyePupilDiameter"] = leftEyePupilDiameter;
-//         }
-//         if (eyeManager.GetLeftEyePupilPositionInSensorArea(out Vector2 leftEyePupilPositionInSensorArea))
-//         {
-//             eyeData["LeftEyePupilPositionInSensorArea"] = new SerializableVector2(leftEyePupilPositionInSensorArea);
-//         }
-//         if (eyeManager.GetEyeOrigin(EyeType.Right, out Vector3 rightEyeOrigin))
-//         {
-//             eyeData["RightEyeOrigin"] = new SerializableVector3(rightEyeOrigin);
-//         }
-//         if (eyeManager.GetEyeDirectionNormalized(EyeType.Right, out Vector3 rightEyeDirection))
-//         {
-//             eyeData["RightEyeDirection"] = new SerializableVector3(rightEyeDirection);
-//         }
-//         if (eyeManager.GetRightEyeOpenness(out float rightEyeOpenness))
-//         {
-//             eyeData["RightEyeOpenness"] = rightEyeOpenness;
-//         }
-//         if (eyeManager.GetRightEyePupilDiameter(out float rightEyePupilDiameter))
-//         {
-//             eyeData["RightEyePupilDiameter"] = rightEyePupilDiameter;
-//         }
-//         if (eyeManager.GetRightEyePupilPositionInSensorArea(out Vector2 rightEyePupilPositionInSensorArea))
-//         {
-//             eyeData["RightEyePupilPositionInSensorArea"] = new SerializableVector2(rightEyePupilPositionInSensorArea);
-//         }
-
-//         // Additional data for reinforcement learning analysis
-//         eyeData["HeadPosePosition"] = new SerializableVector3(Camera.main.transform.position);
-//         eyeData["HeadPoseRotation"] = new SerializableVector3(Camera.main.transform.eulerAngles);
-
-//         string jsonData = JsonConvert.SerializeObject(eyeData, Formatting.Indented);
-//         Log(jsonData);
-
-//         sequenceNumber++;
-//     }
-
-//     private void Log(string message)
-//     {
-//         using (StreamWriter writer = new StreamWriter(logFilePath, true))
-//         {
-//             writer.WriteLine($"{System.DateTime.Now}: {message}");
-//         }
-//     }
-
-//     public class SerializableVector3
-//     {
-//         public float x;
-//         public float y;
-//         public float z;
-
-//         public SerializableVector3(Vector3 vector)
-//         {
-//             x = vector.x;
-//             y = vector.y;
-//             z = vector.z;
-//         }
-//     }
-
-//     public class SerializableVector2
-//     {
-//         public float x;
-//         public float y;
-
-//         public SerializableVector2(Vector2 vector)
-//         {
-//             x = vector.x;
-//             y = vector.y;
-//         }
-//     }
-
-//     public void TestEyeTracking()
-//     {
-//         if(EyeManager.Instance != null){
-//             EyeManager.Instance.EnableEyeTracking = true;
-//         }
-//         if (EyeManager.Instance.IsEyeTrackingAvailable())
-//         {
-//             Debug.Log("->>>>>>> Test Eye track : Eye tracking is available.");
-//             EyeManager.Instance.EnableEyeTracking = true;
-//             if (EyeManager.Instance.HasEyeTrackingData())
-//             {
-//                 Debug.Log("->>>>>>> Test Eye track : Eye data is available.");
-//             }
-//             else
-//             {
-//                 Debug.Log("->>>>>>> Test Eye track : Eye data is not available.");
-//             }
-//         }
-//         else
-//         {
-//             Debug.Log("->>>>>>> Test Eye track : Eye tracking is not available.");
-//         }
-//     }
-// }

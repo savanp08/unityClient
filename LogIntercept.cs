@@ -34,6 +34,8 @@ public class CustomLogger : MonoBehaviour
     {
         using (StreamWriter writer = new StreamWriter(logFilePath, true))
         {
+            if(condition.Contains("NullReferenceException: Object reference not set to an instance of an object")){}
+            else
             writer.WriteLine($"{System.DateTime.Now}: [{type}] {condition}");
         }
     }
